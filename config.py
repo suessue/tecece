@@ -29,4 +29,8 @@ DEBUG_MODE = os.getenv('DEBUG_MODE', 'False').lower() == 'true'
 
 # Webhook Server configuration (for demo purposes)
 WEBHOOK_SERVER_HOST = os.getenv('WEBHOOK_SERVER_HOST', '127.0.0.1')
-WEBHOOK_SERVER_PORT = int(os.getenv('WEBHOOK_SERVER_PORT', '8000')) 
+WEBHOOK_SERVER_PORT = int(os.getenv('WEBHOOK_SERVER_PORT', '8000'))
+
+# oasdiff configuration
+OASDIFF_PATH = os.getenv('OASDIFF_PATH', 'oasdiff')  # Path to oasdiff binary
+OASDIFF_TIMEOUT = int(os.getenv('OASDIFF_TIMEOUT', '30'))  # Timeout for oasdiff commands in seconds 

@@ -41,41 +41,5 @@ def load_json_from_file(file_path):
     with open(file_path, 'r') as f:
         return json.load(f)
 
-def generate_change_summary(diff_result):
-    """Generate a human-readable summary of API specification changes."""
-    if not diff_result:
-        return "No changes detected."
-    
-    summary = []
-    
-    # Add timestamp
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    summary.append(f"API Specification Changes Detected at {timestamp}\n")
-    
-    # Summarize additions
-    if 'added' in diff_result:
-        summary.append("ADDITIONS:")
-        for category, items in diff_result['added'].items():
-            summary.append(f"  {category.upper()}:")
-            for item in items:
-                summary.append(f"    - {item}")
-        summary.append("")
-    
-    # Summarize modifications
-    if 'changed' in diff_result:
-        summary.append("MODIFICATIONS:")
-        for category, items in diff_result['changed'].items():
-            summary.append(f"  {category.upper()}:")
-            for item in items:
-                summary.append(f"    - {item}")
-        summary.append("")
-    
-    # Summarize removals
-    if 'removed' in diff_result:
-        summary.append("REMOVALS:")
-        for category, items in diff_result['removed'].items():
-            summary.append(f"  {category.upper()}:")
-            for item in items:
-                summary.append(f"    - {item}")
-    
-    return "\n".join(summary) 
+# Note: generate_change_summary function has been removed
+# Summary generation is now handled by oasdiff and the WebhookNotifier class 
