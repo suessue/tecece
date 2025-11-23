@@ -33,7 +33,7 @@ import time
 import threading
 
 from main import APISpecMonitor
-from webhook_server import start_server
+from webhook_server import start_server, notifications
 import utils
 import config
 
@@ -332,15 +332,79 @@ def run_demo():
     # Restore the original fetch method
     monitor.fetcher.fetch_current_spec = original_fetch
     
-    print("\n=== Demo completed ===")
-    print("Check the webhook server output above for notification details.")
-    print("The notification should show:")
+    # Give the webhook time to process
+    time.sleep(1)
+    
+    # Display the notification received by the webhook server
+    print("\n" + "=" * 60)
+    print("WEBHOOK SERVER RECEIVED NOTIFICATION")
+    print("=" * 60)
+    
+    if notifications:
+        notification = notifications[-1]  # Get the last notification
+        payload = notification.get('payload', {})
+        
+        print(f"\nEvent Type: {payload.get('event_type')}")
+        print(f"Timestamp: {payload.get('timestamp')}")
+        print(f"Source: {payload.get('source')}")
+        
+        print(f"\nSummary: {payload.get('summary')}")
+        print(f"Has Breaking Changes: {payload.get('has_breaking_changes')}")
+        
+        # Display breaking changes
+        breaking_changes = payload.get('breaking_changes', {})
+        if breaking_changes.get('count', 0) > 0:
+            print(f"\nBreaking Changes ({breaking_changes.get('count')}):")
+            for change in breaking_changes.get('changes', []):
+                print(f"  - {change.get('text')}")
+        
+        # Display changelog
+        changelog = payload.get('changelog', {})
+        if changelog.get('text'):
+            print(f"\nChangelog:")
+            for line in changelog.get('lines', []):
+                line_type = line.get('type')
+                text = line.get('text')
+                if line_type == 'heading':
+                    print(f"  {text}")
+                elif line_type == 'item':
+                    print(f"    - {text}")
+                else:
+                    print(f"    {text}")
+        
+        # Display spec info
+        spec_info = payload.get('current_spec', {}).get('info', {})
+        print(f"\nCurrent API Specification:")
+        print(f"  Title: {spec_info.get('title')}")
+        print(f"  Version: {spec_info.get('version')}")
+        print(f"  Paths: {spec_info.get('paths_count')}")
+        print(f"  Operations: {spec_info.get('operations_count')}")
+        
+        # Display metadata
+        metadata = payload.get('metadata', {})
+        print(f"\nMetadata:")
+        print(f"  Diff Tool: {metadata.get('diff_tool')}")
+        print(f"  Monitor Version: {metadata.get('monitor_version')}")
+        print(f"  Notification ID: {metadata.get('notification_id')}")
+        
+    else:
+        print("No notifications received!")
+    
+    print("\n" + "=" * 60)
+    print("=== Demo completed ===")
+    print("=" * 60)
+    print("The webhook notification has been displayed above.")
+    print("The notification includes:")
+    print("  • Event details (type, timestamp, source)")
+    print("  • Summary of changes")
     print("  • Breaking changes detected")
-    print("  • Full changelog with all changes")
-    print("  • Complete API specification content")
+    print("  • Full changelog with structured entries")
+    print("  • Current API specification information")
+    print("  • Metadata (tool version, notification ID, etc.)")
     print("\nIf you encountered any 'unauthorized' errors, they should now be resolved")
     print("with the consistent webhook secret configuration.")
     print("\nPress Ctrl+C to exit.")
+    print("=" * 60)
     
     # Clean up temporary file
     try:
