@@ -40,6 +40,3 @@ def load_json_from_file(file_path):
     
     with open(file_path, 'r') as f:
         return json.load(f)
-
-# Note: generate_change_summary function has been removed
-# Summary generation is now handled by oasdiff and the WebhookNotifier class 
