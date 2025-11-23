@@ -12,9 +12,9 @@ def setup_demo_environment():
     """Set up environment variables for demo to avoid configuration issues."""
     demo_env = {
         'WEBHOOK_SECRET': 'demo_webhook_secret_12345',
-        'WEBHOOK_URL': 'http://localhost:8000/webhook',
+        'WEBHOOK_URL': 'http://localhost:8001/webhook',
         'WEBHOOK_SERVER_HOST': '127.0.0.1',
-        'WEBHOOK_SERVER_PORT': '8000',
+        'WEBHOOK_SERVER_PORT': '8001',
         'SPEC_STORAGE_DIR': 'api_specs'
     }
     
@@ -47,10 +47,10 @@ def start_webhook_server():
         
         # Give the server time to start
         time.sleep(2)
-        print("✓ Webhook server is running.")
+        print("[OK] Webhook server is running.")
         return webhook_thread
     except Exception as e:
-        print(f"✗ Error starting webhook server: {e}")
+        print(f"[ERROR] Error starting webhook server: {e}")
         print("Continuing with demo, but webhook notifications may not be received.")
         return None
 
@@ -280,21 +280,21 @@ def run_demo():
     print()
     
     # Demo environment was already set up during module import
-    print(f"✓ Demo environment configured with webhook secret: {demo_env['WEBHOOK_SECRET']}")
-    print(f"✓ Config module webhook secret: {config.WEBHOOK_SECRET}")
+    print(f"[OK] Demo environment configured with webhook secret: {demo_env['WEBHOOK_SECRET']}")
+    print(f"[OK] Config module webhook secret: {config.WEBHOOK_SECRET}")
     
     # Double-check that the configuration is properly loaded
     if config.WEBHOOK_SECRET != demo_env['WEBHOOK_SECRET']:
-        print(f"⚠ Warning: Config mismatch detected. Overriding...")
+        print(f"[WARNING] Config mismatch detected. Overriding...")
         config.WEBHOOK_SECRET = demo_env['WEBHOOK_SECRET']
     
     # Check if oasdiff is available
     try:
         from diff_detector import APISpecDiffDetector
         detector = APISpecDiffDetector()
-        print("✓ oasdiff is available and ready to use")
+        print("[OK] oasdiff is available and ready to use")
     except RuntimeError as e:
-        print(f"✗ Error: {e}")
+        print(f"[ERROR] {e}")
         print("\nPlease install oasdiff first:")
         print("  Go users: go install github.com/oasdiff/oasdiff@latest")
         print("  macOS users: brew tap oasdiff/homebrew-oasdiff && brew install oasdiff")
@@ -309,7 +309,7 @@ def run_demo():
     
     # Ensure the webhook notifier uses the correct webhook secret
     monitor.notifier.webhook_secret = demo_env['WEBHOOK_SECRET']
-    print(f"✓ Monitor webhook notifier secret set to: {monitor.notifier.webhook_secret}")
+    print(f"[OK] Monitor webhook notifier secret set to: {monitor.notifier.webhook_secret}")
     
     # Simulate a change in the API specification
     modified_spec_path = simulate_api_spec_change()

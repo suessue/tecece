@@ -73,7 +73,7 @@ oasdiff --version
    SPEC_STORAGE_DIR=api_specs
 
    # Webhook Configuration
-   WEBHOOK_URL=http://localhost:8000/webhook
+   WEBHOOK_URL=http://localhost:8001/webhook
    WEBHOOK_SECRET=your_webhook_secret_here
 
    # Scheduler Configuration (check interval in minutes)
@@ -92,7 +92,7 @@ oasdiff --version
 
    # Webhook Server Configuration (for demo purposes)
    WEBHOOK_SERVER_HOST=127.0.0.1
-   WEBHOOK_SERVER_PORT=8000
+   WEBHOOK_SERVER_PORT=8001
    ```
 
 4. **Run the application**

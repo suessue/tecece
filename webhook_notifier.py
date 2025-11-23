@@ -44,13 +44,17 @@ class WebhookNotifier:
             # Prepare the payload with the new structure
             payload = self._prepare_payload(diff_result)
             
-            # Add signature to headers for security verification
-            headers = self._generate_headers(payload)
+            # Serialize payload to exact JSON string (must be done ONCE for signature verification)
+            payload_str = json.dumps(payload, sort_keys=True)
             
-            # Send the webhook request
+            # Add signature to headers for security verification using the exact payload string
+            headers = self._generate_headers_with_payload(payload_str)
+            
+            # Send the webhook request with the exact JSON string that was signed
+            # IMPORTANT: Use 'data' parameter, not 'json', to ensure the exact bytes are sent
             response = requests.post(
                 self.webhook_url,
-                json=payload,
+                data=payload_str,
                 headers=headers,
                 timeout=10
             )
@@ -209,8 +213,16 @@ class WebhookNotifier:
         """
         return f"notify_{int(time.time())}_{hash(str(datetime.now())) % 10000:04d}"
     
-    def _generate_headers(self, payload: Dict[str, Any]) -> Dict[str, str]:
-        """Generate headers for the webhook request including a security signature."""
+    def _generate_headers_with_payload(self, payload_str: str) -> Dict[str, str]:
+        """
+        Generate headers for the webhook request including a security signature.
+        
+        Args:
+            payload_str: The exact JSON string that will be sent (already serialized)
+            
+        Returns:
+            Headers dict with security headers
+        """
         headers = {
             "Content-Type": "application/json",
             "User-Agent": "GitHub-API-Spec-Monitor/2.0-oasdiff"
@@ -219,7 +231,7 @@ class WebhookNotifier:
         # Add signature for webhook security verification
         if self.webhook_secret:
             timestamp = str(int(time.time()))
-            payload_str = json.dumps(payload, sort_keys=True)
+            # Use the exact payload string that will be sent
             signature_message = f"{timestamp}.{payload_str}"
             
             # Create HMAC SHA256 signature
