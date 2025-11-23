@@ -40,13 +40,17 @@ class APISpecMonitor:
         stored_current, stored_previous = self.fetcher.get_stored_specs()
         
         # Detect changes between the fetched spec and the stored current spec
-        changes = self.diff_detector.detect_changes(current_spec, stored_current)
+        diff_result = self.diff_detector.detect_changes(current_spec, stored_current)
         
-        if changes:
+        if diff_result:
             logger.info("Changes detected in API specification, sending notification")
             
+            # Log summary of changes
+            if diff_result.get('has_breaking_changes'):
+                logger.warning(f"Breaking changes detected: {len(diff_result.get('breaking_changes', []))} breaking change(s)")
+            
             # Send webhook notification
-            notification_sent = self.notifier.send_notification(changes)
+            notification_sent = self.notifier.send_notification(diff_result)
             
             if notification_sent:
                 logger.info("Notification sent successfully")

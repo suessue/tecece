@@ -1,19 +1,62 @@
 import logging
-from deepdiff import DeepDiff
+import subprocess
+import json
+import tempfile
+import os
+from typing import Dict, List, Optional, Any
+
+import config
 
 logger = logging.getLogger('api_spec_monitor.diff')
 
 class APISpecDiffDetector:
-    """Detects differences between API specifications."""
+    """Detects differences between API specifications using oasdiff."""
     
-    def __init__(self):
-        # HTTP methods supported by OpenAPI
-        self.http_methods = ['get', 'post', 'put', 'delete', 'options', 'head', 'patch', 'trace']
-    
-    def detect_changes(self, current_spec, previous_spec):
+    def __init__(self, oasdiff_path: str = None):
         """
-        Detect changes between current and previous API specifications.
-        Returns a dictionary with categorized changes or None if no comparison could be made.
+        Initialize the diff detector.
+        
+        Args:
+            oasdiff_path: Path to the oasdiff binary (default: from config.OASDIFF_PATH)
+        """
+        self.oasdiff_path = oasdiff_path or config.OASDIFF_PATH
+        self.timeout = config.OASDIFF_TIMEOUT
+        self._validate_oasdiff_installation()
+    
+    def _validate_oasdiff_installation(self):
+        """Validate that oasdiff is installed and accessible."""
+        try:
+            result = subprocess.run(
+                [self.oasdiff_path, "--version"],
+                capture_output=True,
+                text=True,
+                timeout=10
+            )
+            if result.returncode == 0:
+                logger.info(f"oasdiff found: {result.stdout.strip()}")
+            else:
+                logger.warning(f"oasdiff validation failed with return code {result.returncode}")
+        except (subprocess.TimeoutExpired, subprocess.SubprocessError, FileNotFoundError) as e:
+            logger.error(f"oasdiff not found or not accessible: {e}")
+            logger.error("Please install oasdiff: https://github.com/oasdiff/oasdiff#installation")
+            logger.error("Or run: python install_oasdiff.py")
+            raise RuntimeError("oasdiff is required but not available")
+    
+    def detect_changes(self, current_spec: Dict[str, Any], previous_spec: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+        """
+        Detect changes between current and previous API specifications using oasdiff.
+        
+        Args:
+            current_spec: The current API specification
+            previous_spec: The previous API specification (None for initial version)
+            
+        Returns:
+            Dictionary with structured diff results including:
+            - breaking_changes: List of breaking changes
+            - changelog: Full changelog
+            - current_spec: The current API specification
+            - has_breaking_changes: Boolean indicating if there are breaking changes
+            - summary: Human-readable summary
         """
         if not current_spec:
             logger.warning("Current specification is not available for comparison")
@@ -21,372 +64,226 @@ class APISpecDiffDetector:
             
         if not previous_spec:
             logger.info("No previous specification available for comparison. Treating as initial version.")
-            paths = list(current_spec.get('paths', {}).keys())
             return {
-                'added': {
-                    'paths': paths,
-                    'security_schemes': list(current_spec.get('components', {}).get('securitySchemes', {}).keys())
-                },
-                'changed': {},
-                'removed': {}
+                'breaking_changes': [],
+                'changelog': self._generate_initial_changelog(current_spec),
+                'current_spec': current_spec,
+                'has_breaking_changes': False,
+                'summary': "Initial API specification version"
             }
         
         try:
-            # Use DeepDiff to find differences
-            diff = DeepDiff(previous_spec, current_spec, ignore_order=True)
-            
-            # Extract relevant changes from the diff
-            changes = self._categorize_changes(diff, previous_spec, current_spec)
-            
-            if changes and any(changes.values()):
-                logger.info("Changes detected in API specification")
-                return changes
-            else:
-                logger.info("No significant changes detected in API specification")
-                return None
+            # Create temporary files for the specifications
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as prev_file, \
+                 tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as curr_file:
                 
+                # Write specifications to temporary files
+                json.dump(previous_spec, prev_file, indent=2)
+                json.dump(current_spec, curr_file, indent=2)
+                prev_file.flush()
+                curr_file.flush()
+                
+                try:
+                    # Get breaking changes
+                    breaking_changes = self._get_breaking_changes(prev_file.name, curr_file.name)
+                    
+                    # Get full changelog
+                    changelog = self._get_changelog(prev_file.name, curr_file.name)
+                    
+                    # Determine if there are actual changes
+                    has_changes = bool(breaking_changes or (changelog and changelog.strip()))
+                    
+                    if has_changes:
+                        logger.info("Changes detected in API specification")
+                        return {
+                            'breaking_changes': breaking_changes,
+                            'changelog': changelog,
+                            'current_spec': current_spec,
+                            'has_breaking_changes': bool(breaking_changes),
+                            'summary': self._generate_summary(breaking_changes, changelog)
+                        }
+                    else:
+                        logger.info("No significant changes detected in API specification")
+                        return None
+                        
+                finally:
+                    # Clean up temporary files
+                    try:
+                        os.unlink(prev_file.name)
+                        os.unlink(curr_file.name)
+                    except OSError:
+                        pass  # Files may have been already deleted
+                        
         except Exception as e:
             logger.error(f"Error comparing API specifications: {str(e)}")
             return None
     
-    def _categorize_changes(self, diff, previous_spec, current_spec):
-        """Categorize changes into added, changed, and removed items."""
-        changes = {
-            'added': {},
-            'changed': {},
-            'removed': {}
-        }
+    def _get_breaking_changes(self, prev_file_path: str, curr_file_path: str) -> List[Dict[str, Any]]:
+        """
+        Get breaking changes using oasdiff breaking command.
         
-        # Process path-level changes
-        self._process_path_changes(diff, changes, previous_spec, current_spec)
-        
-        # Process operation-level changes (new HTTP methods on existing/new paths)
-        self._process_operation_changes(diff, changes, previous_spec, current_spec)
-        
-        # Process parameter changes (including required parameter changes)
-        self._process_parameter_changes(diff, changes, previous_spec, current_spec)
-        
-        # Process request/response format changes
-        self._process_request_response_changes(diff, changes, previous_spec, current_spec)
-        
-        # Process authentication/security changes
-        self._process_security_changes(diff, changes, previous_spec, current_spec)
-        
-        # Process component changes
-        self._process_component_changes(diff, changes)
-        
-        return changes
-    
-    def _process_path_changes(self, diff, changes, previous_spec, current_spec):
-        """Process changes at the path level."""
-        # Process added paths
-        added_paths = self._extract_paths(diff.get('dictionary_item_added', set()), 'paths')
-        if added_paths:
-            changes['added']['paths'] = added_paths
+        Args:
+            prev_file_path: Path to previous specification file
+            curr_file_path: Path to current specification file
             
-        # Process modified paths
-        changed_paths = self._extract_paths(diff.get('values_changed', {}), 'paths')
-        if changed_paths:
-            changes['changed']['paths'] = changed_paths
+        Returns:
+            List of breaking changes
+        """
+        try:
+            result = subprocess.run(
+                [self.oasdiff_path, "breaking", prev_file_path, curr_file_path, "--format", "json"],
+                capture_output=True,
+                text=True,
+                timeout=self.timeout
+            )
             
-        # Process removed paths
-        removed_paths = self._extract_paths(diff.get('dictionary_item_removed', set()), 'paths')
-        if removed_paths:
-            changes['removed']['paths'] = removed_paths
-    
-    def _process_operation_changes(self, diff, changes, previous_spec, current_spec):
-        """Process changes at the operation level (HTTP methods within paths)."""
-        added_operations = []
-        removed_operations = []
-        changed_operations = []
-        
-        # Track paths that have been processed
-        processed_paths = set()
-
-        # First, identify truly new paths and operations
-        for item in diff.get('dictionary_item_added', set()):
-            item_str = str(item)
-            path, method = self._extract_operation_info(item_str)
-            if path and method:
-                operation = f"{method.upper()} {path}"
-                if path not in previous_spec.get('paths', {}):
-                    # This is a completely new path
-                    added_operations.append(operation)
+            if result.returncode == 0:
+                # Check if there's JSON output indicating breaking changes
+                if result.stdout.strip():
+                    try:
+                        breaking_changes_data = json.loads(result.stdout)
+                        return self._parse_breaking_changes(breaking_changes_data)
+                    except json.JSONDecodeError:
+                        logger.warning(f"Failed to parse breaking changes JSON: {result.stdout}")
+                        return [{"description": result.stdout.strip()}] if result.stdout.strip() else []
                 else:
-                    # This is a modification to an existing path
-                    changed_operations.append(operation)
-                processed_paths.add(path)
-
-        # Check for removed operations
-        for item in diff.get('dictionary_item_removed', set()):
-            item_str = str(item)
-            path, method = self._extract_operation_info(item_str)
-            if path and method:
-                removed_operations.append(f"{method.upper()} {path}")
-
-        # Check for changes to existing operations
-        for key in diff.get('values_changed', {}):
-            key_str = str(key)
-            path, method = self._extract_operation_info(key_str)
-            if path and method:
-                operation = f"{method.upper()} {path}"
-                if operation not in changed_operations and path in processed_paths:
-                    changed_operations.append(operation)
-
-        if added_operations:
-            changes['added']['operations'] = added_operations
-        if removed_operations:
-            changes['removed']['operations'] = removed_operations
-        if changed_operations:
-            changes['changed']['operations'] = changed_operations
-    
-    def _process_parameter_changes(self, diff, changes, previous_spec, current_spec):
-        """Process parameter changes, especially required parameter changes."""
-        required_params_added = []
-        required_params_removed = []
-        
-        # Check for parameters becoming required
-        for key, change_info in diff.get('values_changed', {}).items():
-            key_str = str(key)
-            if 'required' in key_str and 'parameters' in key_str:
-                old_value = change_info.get('old_value')
-                new_value = change_info.get('new_value')
+                    # No output means no breaking changes
+                    return []
+            else:
+                logger.error(f"oasdiff breaking command failed with return code {result.returncode}: {result.stderr}")
+                return []
                 
-                if old_value == False and new_value == True:
-                    param_info = self._extract_parameter_info(key_str)
-                    if param_info:
-                        required_params_added.append(param_info)
-                elif old_value == True and new_value == False:
-                    param_info = self._extract_parameter_info(key_str)
-                    if param_info:
-                        required_params_removed.append(param_info)
-        
-        # Check for new required parameters
-        for item in diff.get('dictionary_item_added', set()):
-            item_str = str(item)
-            if 'parameters' in item_str:
-                param_info = self._check_if_required_parameter(item_str, current_spec)
-                if param_info:
-                    required_params_added.append(param_info)
-        
-        if required_params_added:
-            changes['added']['required_parameters'] = required_params_added
-        if required_params_removed:
-            changes['removed']['required_parameters'] = required_params_removed
-    
-    def _process_request_response_changes(self, diff, changes, previous_spec, current_spec):
-        """Process changes in request and response formats."""
-        request_format_changes = []
-        response_format_changes = []
-        
-        for key in diff.get('values_changed', {}):
-            key_str = str(key)
-            
-            # Check for request body schema changes
-            if 'requestBody' in key_str and ('schema' in key_str or 'content' in key_str):
-                operation_info = self._extract_operation_from_key(key_str)
-                if operation_info:
-                    request_format_changes.append(operation_info)
-            
-            # Check for response schema changes
-            if 'responses' in key_str and ('schema' in key_str or 'content' in key_str):
-                operation_info = self._extract_operation_from_key(key_str)
-                if operation_info:
-                    response_format_changes.append(operation_info)
-        
-        # Check for added/removed request/response content types
-        for item in diff.get('dictionary_item_added', set()):
-            item_str = str(item)
-            if 'requestBody' in item_str and 'content' in item_str:
-                operation_info = self._extract_operation_from_key(item_str)
-                if operation_info:
-                    request_format_changes.append(f"{operation_info} (new content type)")
-            elif 'responses' in item_str and 'content' in item_str:
-                operation_info = self._extract_operation_from_key(item_str)
-                if operation_info:
-                    response_format_changes.append(f"{operation_info} (new content type)")
-        
-        if request_format_changes:
-            changes['changed']['request_formats'] = list(set(request_format_changes))
-        if response_format_changes:
-            changes['changed']['response_formats'] = list(set(response_format_changes))
-    
-    def _process_security_changes(self, diff, changes, previous_spec, current_spec):
-        """Process authentication and security changes."""
-        # Global security changes
-        global_security_changes = []
-        operation_security_changes = []
-        
-        # Check for global security changes
-        for key in diff.get('values_changed', {}):
-            key_str = str(key)
-            if key_str == "root['security']":
-                global_security_changes.append("Global security requirements changed")
-        
-        # Check for operation-level security changes
-        for key in diff.get('values_changed', {}):
-            key_str = str(key)
-            if 'security' in key_str and 'paths' in key_str:
-                operation_info = self._extract_operation_from_key(key_str)
-                if operation_info:
-                    operation_security_changes.append(f"{operation_info} security changed")
-        
-        # Check for new security schemes
-        security_schemes_added = self._extract_components(diff.get('dictionary_item_added', set()), 'components.securitySchemes')
-        security_schemes_removed = self._extract_components(diff.get('dictionary_item_removed', set()), 'components.securitySchemes')
-        
-        if global_security_changes:
-            changes['changed']['global_security'] = global_security_changes
-        if operation_security_changes:
-            changes['changed']['operation_security'] = operation_security_changes
-        if security_schemes_added:
-            changes['added']['security_schemes'] = security_schemes_added
-        if security_schemes_removed:
-            changes['removed']['security_schemes'] = security_schemes_removed
-    
-    def _process_component_changes(self, diff, changes):
-        """Process changes in reusable components."""
-        components_types = ['schemas', 'parameters', 'responses', 'requestBodies', 'headers']
-        for comp_type in components_types:
-            comp_path = f"components.{comp_type}"
-            
-            added = self._extract_components(diff.get('dictionary_item_added', set()), comp_path)
-            if added:
-                changes['added'][comp_type] = added
-                
-            changed = self._extract_components(diff.get('values_changed', {}), comp_path)
-            if changed:
-                changes['changed'][comp_type] = changed
-                
-            removed = self._extract_components(diff.get('dictionary_item_removed', set()), comp_path)
-            if removed:
-                changes['removed'][comp_type] = removed
-    
-    def _is_operation_change(self, item_str):
-        """Check if the change is at the operation level."""
-        if 'root[\'paths\']' not in item_str:
-            return False
-        
-        for method in self.http_methods:
-            if f"['{method}']" in item_str:
-                return True
-        return False
-    
-    def _extract_operation_info(self, item_str):
-        """Extract path and method from operation change."""
-        try:
-            # Parse something like "root['paths']['/users']['get']"
-            parts = item_str.split("']")
-            if len(parts) >= 3:
-                path = parts[1].split("['")[1] if "['/" in parts[1] else None
-                method = parts[2].split("['")[1] if "['" in parts[2] else None
-                return path, method
-        except (IndexError, AttributeError):
-            pass
-        return None, None
-    
-    def _extract_operation_from_key(self, key_str):
-        """Extract operation info from a nested key."""
-        try:
-            if 'paths' in key_str:
-                # Find path and method in the key
-                parts = key_str.split("']")
-                path = None
-                method = None
-                
-                for i, part in enumerate(parts):
-                    if "['/" in part:  # This is a path
-                        path = part.split("['")[1]
-                    elif any(f"['{m}']" in part for m in self.http_methods):
-                        for m in self.http_methods:
-                            if f"['{m}']" in part:
-                                method = m
-                                break
-                
-                if path and method:
-                    return f"{method.upper()} {path}"
-        except (IndexError, AttributeError):
-            pass
-        return None
-    
-    def _extract_parameter_info(self, key_str):
-        """Extract parameter information from key."""
-        try:
-            operation_info = self._extract_operation_from_key(key_str)
-            if operation_info and 'parameters' in key_str:
-                # Try to extract parameter name/index
-                param_match = key_str.split('parameters')[1]
-                return f"{operation_info} parameter"
-        except (IndexError, AttributeError):
-            pass
-        return None
-    
-    def _check_if_required_parameter(self, item_str, current_spec):
-        """Check if a newly added parameter is required."""
-        try:
-            operation_info = self._extract_operation_from_key(item_str)
-            if operation_info:
-                # This is a simplified check - in a real implementation,
-                # you'd want to parse the actual parameter definition
-                return f"{operation_info} new parameter"
-        except:
-            pass
-        return None
-    
-    def _get_all_operations(self, spec):
-        """Get all operations from a spec for initial comparison."""
-        operations = []
-        paths = spec.get('paths', {})
-        for path, path_obj in paths.items():
-            for method in self.http_methods:
-                if method in path_obj:
-                    operations.append(f"{method.upper()} {path}")
-        return operations
-    
-    def _extract_paths(self, diff_set, key_prefix):
-        """Extract path changes from the diff set."""
-        if not diff_set:
+        except (subprocess.TimeoutExpired, subprocess.SubprocessError) as e:
+            logger.error(f"Error running oasdiff breaking command: {e}")
             return []
-            
-        results = []
-        prefix = f"root['{key_prefix}']"
-        
-        for item in diff_set:
-            item_str = str(item)
-            if isinstance(item, str) and item.startswith(prefix):
-                # Format: root['paths']['/path/endpoint']
-                parts = item_str.split(']')
-                if len(parts) >= 3:
-                    path = parts[1].strip("['")
-                    results.append(path)
-            elif isinstance(item, dict) and prefix in item_str:
-                # For values_changed format
-                path_part = item_str.split(prefix)[1].split("'")[1] if "'" in item_str else ""
-                if path_part:
-                    results.append(path_part)
-                    
-        return results
     
-    def _extract_components(self, diff_set, key_prefix):
-        """Extract component changes from the diff set."""
-        if not diff_set:
-            return []
-            
-        results = []
-        prefix = f"root['{key_prefix.split('.')[0]}']['{key_prefix.split('.')[1]}']"
+    def _get_changelog(self, prev_file_path: str, curr_file_path: str) -> str:
+        """
+        Get full changelog using oasdiff changelog command.
         
-        for item in diff_set:
-            item_str = str(item)
-            if isinstance(item, str) and prefix in item_str:
-                # Extract component name
-                parts = item_str.split(prefix)[1].split("'")
-                if len(parts) >= 3:
-                    component = parts[1]
-                    results.append(component)
-            elif isinstance(item, dict) and prefix in item_str:
-                # For values_changed format
-                comp_part = item_str.split(prefix)[1].split("'")[1] if "'" in item_str else ""
-                if comp_part:
-                    results.append(comp_part)
-                    
-        return results 
+        Args:
+            prev_file_path: Path to previous specification file
+            curr_file_path: Path to current specification file
+            
+        Returns:
+            Changelog as string
+        """
+        try:
+            result = subprocess.run(
+                [self.oasdiff_path, "changelog", prev_file_path, curr_file_path],
+                capture_output=True,
+                text=True,
+                timeout=self.timeout
+            )
+            
+            if result.returncode == 0:
+                return result.stdout.strip()
+            else:
+                logger.warning(f"oasdiff changelog command returned {result.returncode}: {result.stderr}")
+                return result.stdout.strip() if result.stdout.strip() else ""
+                
+        except (subprocess.TimeoutExpired, subprocess.SubprocessError) as e:
+            logger.error(f"Error running oasdiff changelog command: {e}")
+            return ""
+    
+    def _parse_breaking_changes(self, breaking_changes_data: Any) -> List[Dict[str, Any]]:
+        """
+        Parse breaking changes data from oasdiff JSON output.
+        
+        Args:
+            breaking_changes_data: Raw breaking changes data from oasdiff
+            
+        Returns:
+            List of structured breaking changes
+        """
+        breaking_changes = []
+        
+        if isinstance(breaking_changes_data, list):
+            # Handle array format
+            for change in breaking_changes_data:
+                if isinstance(change, dict):
+                    breaking_changes.append({
+                        'id': change.get('id', ''),
+                        'text': change.get('text', ''),
+                        'level': change.get('level', 'error'),
+                        'operation': change.get('operation', ''),
+                        'path': change.get('path', ''),
+                        'source': change.get('source', '')
+                    })
+                else:
+                    breaking_changes.append({'description': str(change)})
+        elif isinstance(breaking_changes_data, dict):
+            # Handle object format
+            if 'breakingChanges' in breaking_changes_data:
+                for change in breaking_changes_data['breakingChanges']:
+                    breaking_changes.append({
+                        'id': change.get('id', ''),
+                        'text': change.get('text', ''),
+                        'level': change.get('level', 'error'),
+                        'operation': change.get('operation', ''),
+                        'path': change.get('path', ''),
+                        'source': change.get('source', '')
+                    })
+            else:
+                # Fallback for other formats
+                breaking_changes.append({'description': str(breaking_changes_data)})
+        else:
+            breaking_changes.append({'description': str(breaking_changes_data)})
+        
+        return breaking_changes
+    
+    def _generate_initial_changelog(self, current_spec: Dict[str, Any]) -> str:
+        """
+        Generate a changelog for the initial API specification.
+        
+        Args:
+            current_spec: The current API specification
+            
+        Returns:
+            Initial changelog as string
+        """
+        lines = ["Initial API specification version\n"]
+        
+        # Count paths and operations
+        paths = current_spec.get('paths', {})
+        total_paths = len(paths)
+        total_operations = sum(
+            len([key for key in path_obj.keys() if key.lower() in ['get', 'post', 'put', 'delete', 'patch', 'options', 'head', 'trace']])
+            for path_obj in paths.values()
+        )
+        
+        lines.append(f"- {total_paths} API paths")
+        lines.append(f"- {total_operations} operations")
+        
+        # List components
+        components = current_spec.get('components', {})
+        for comp_type, comp_data in components.items():
+            if isinstance(comp_data, dict) and comp_data:
+                lines.append(f"- {len(comp_data)} {comp_type}")
+        
+        return "\n".join(lines)
+    
+    def _generate_summary(self, breaking_changes: List[Dict[str, Any]], changelog: str) -> str:
+        """
+        Generate a human-readable summary of changes.
+        
+        Args:
+            breaking_changes: List of breaking changes
+            changelog: Full changelog
+            
+        Returns:
+            Summary string
+        """
+        summary_parts = []
+        
+        if breaking_changes:
+            summary_parts.append(f"⚠️ {len(breaking_changes)} breaking change(s) detected")
+        
+        if changelog and changelog.strip():
+            changelog_lines = [line.strip() for line in changelog.split('\n') if line.strip()]
+            summary_parts.append(f"📝 {len(changelog_lines)} total changes")
+        
+        if not summary_parts:
+            return "No significant changes detected"
+        
+        return " | ".join(summary_parts) 
